@@ -1,0 +1,52 @@
+#!/bin/bash
+
+set -e
+
+function run {
+    echo
+    echo ">>>"
+    echo ">>> $*"
+    echo ">>>"
+    $*
+}
+
+SCRIPTPATH=`readlink -m $0`
+BINPATH=`dirname $SCRIPTPATH`
+CHEFTAG=$BINPATH/cheftag
+PROGNAME=`basename $SCRIPTPATH`
+TMPFILE=`mktemp`
+
+trap "rm $TMPFILE" EXIT
+
+DIRTY=`git status --porcelain | wc -l`
+if [ "$DIRTY" != "0" ]; then
+    echo "$PROGNAME: Your working tree is dirty! Commit or stash before releasing a new version."
+    exit 1
+fi
+
+if [ ! -x "$CHEFTAG" ]; then
+    echo "$PROGNAME: The program 'cheftag' is missing or not executable. It should be in the same location as this script."
+    exit 2
+fi
+
+NAME=`egrep "^name\s+'.+'" metadata.rb | cut -f2 -d\'`
+VERSION=`egrep "^version\s+'.+'" metadata.rb | cut -f2 -d\'`
+
+echo "Releasing cookbook $NAME $VERSION"
+
+run "berks -q"
+run "berks update"
+run "berks upload" | tee $TMPFILE
+
+set +e
+egrep "^Uploaded $NAME \($VERSION\)" $TMPFILE >/dev/null
+if [ $? -ne 0 ]; then
+    echo "$PROGNAME: $NAME version $VERSION is already uploaded to Chef server, aborting."
+    exit 3
+fi
+set -e
+
+run $CHEFTAG
+
+run git push
+run git push --tags

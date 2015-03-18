@@ -1,0 +1,32 @@
+#!/bin/bash
+#
+# Test script to support replacing OpenStack driver configuration and running
+# kitchen in one command.
+#
+# Synopsis: openstack-kitchen <action> <box> [parameters to openstack-kitchen-configure]
+#
+
+# terminate on errors
+set -e
+
+# save parameters
+action=$1
+boxes=$2
+shift 2
+
+# generate local openstack configuration
+openstack-kitchen-configure --yes $* > .kitchen.local.yml
+
+# ensure any new cookbook versions are used
+rm -f Berksfile.lock
+
+# run kitchen
+set +e
+kitchen $action --concurrency
+status=$?
+
+# destroy any generated VM's
+kitchen destroy $boxes
+
+# return with exit status from first kitchen process
+exit $status

@@ -1,0 +1,32 @@
+#!/usr/bin/env perl
+#
+# cheftag.pl: Tags a Chef cookbook with the version provided in metadata.rb.
+
+use strict;
+
+sub get_version {
+    my $file = "metadata.rb";
+    if ( ! -r $file ) {
+        die "Can't find $file: are you in the right directory?";
+    }
+    open(my $fd, "<", $file);
+    while (<$fd>) {
+        chomp;
+        if ($_ =~ m/version\s+['"]([\d\.]+)['"]/) {
+            return $+;
+        }
+    }
+    die "Can't find version string in metadata.rb!"
+}
+
+sub run_git {
+    my $version = shift(@_);
+    my $cmd = "git tag -s -m 'Version $version' $version";
+    print "$cmd\n\n";
+    exec($cmd);
+}
+
+my $version = get_version();
+if ($version) {
+    run_git($version);
+}

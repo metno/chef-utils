@@ -1,0 +1,113 @@
+#!/usr/bin/env python2.7
+
+import os
+import sys
+import re
+import argparse
+import inspect
+import subprocess
+
+CONFIG_TEMPLATE = """
+---
+driver:
+  name: openstack
+  openstack_username: %(username)s
+  openstack_api_key: %(api_key)s
+  openstack_tenant: %(tenant)s
+  key_name: %(key_name)s
+  openstack_auth_url: %(auth_url)s
+  require_chef_omnibus: true
+  image_ref: %(image_ref)s
+  flavor_ref: %(flavor_ref)s
+  username: ubuntu
+  floating_ip_pool: public
+  security_groups:
+    - default
+  network_ref:
+    - %(network_ref)s
+"""
+
+VALUES = {
+    'username'   : os.getenv('OS_USERNAME'),
+    'api_key'    : os.getenv('OS_PASSWORD'),
+    'tenant'     : os.getenv('OS_TENANT_NAME'),
+    'key_name'   : os.getenv('USER'),
+    'auth_url'   : "%s/tokens" % os.getenv('OS_AUTH_URL'),
+    'image_ref'  : 0,
+    'flavor_ref' : 0,
+    'network_ref': 'default',
+}
+
+def interpolate(template, values):
+    return template % values
+
+def run_dmc(cmd):
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    stdout, stderr = process.communicate()
+    if process.returncode != 0:
+        raise Exception('%s returned exit code %d' % (' '.join(cmd), process.returncode))
+    return stdout.splitlines()
+
+def table_choices(cmd, pattern, id_seq, text_seq):
+    lines = run_dmc(cmd)
+    rex = re.compile(pattern)
+    choices = []
+    for line in lines:
+        match = rex.match(line)
+        if match is None:
+            continue
+        choices += [(match.group(id_seq), match.group(text_seq))]
+    return choices
+
+def choices_image_ref():
+    return table_choices(['nova', 'image-list'], r"^\|\s+(\w{8}-\w{4}-\w{4}-\w{4}-\w{12})\s+\|\s+([^\|]+)\s+\|.*$", 1, 2)
+
+def choices_flavor_ref():
+    return table_choices(['nova', 'flavor-list'], r"^\|\s+([a-z0-9\-]+)\s+\|\s+([^\|]+)\s+\|.*$", 1, 2)
+
+def print_choices(choices):
+    for i, choice in enumerate(choices):
+        sys.stderr.write("  [%d] %s\n" % (i, choice[1]))
+
+def subst(key, value):
+    func_name = 'choices_' + key
+    if func_name in globals():
+        choices = globals()[func_name]()
+        sys.stderr.write("Possible choices for '%s':\n" % key)
+        print_choices(choices)
+        while True:
+            sys.stderr.write("Enter choice for '%s' [%s]: " % (key, value))
+            try:
+                choice = sys.stdin.readline().strip()
+                choice = int(choice) if choice else 0
+                assert choice >= 0 and choice < len(choices)
+            except (AssertionError, ValueError):
+                sys.stderr.write("WHAT ARE YOU DOING, DAVE?\n")
+                continue
+            return choices[choice][0]
+    else:
+        sys.stderr.write("Enter value for '%s' [%s]: " % (key, value))
+        return sys.stdin.readline().strip()
+
+def define_args(parser, values):
+    parser.add_argument("-y", "--yes", default=False, action='store_true', help="assume defaults to all configuration options")
+    for key in values.keys():
+        parser.add_argument("--%s" % key)
+
+def subst_loop(args, values):
+    sys.stderr.write("Enter OpenStack configuration (press ENTER to use default value)\n")
+    for key, value in values.iteritems():
+        arg_value = getattr(args, key)
+        if arg_value:
+            values[key] = arg_value
+        elif not args.yes:
+            new_value = subst(key, value)
+            if new_value:
+                values[key] = new_value
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    define_args(parser, VALUES)
+    args = parser.parse_args()
+    subst_loop(args, VALUES)
+    print interpolate(CONFIG_TEMPLATE, VALUES)
