@@ -1,0 +1,73 @@
+#!/usr/bin/env python2.7
+
+import sys
+import json
+import argparse
+import subprocess
+
+def execute(cmd):
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
+    stdout, stderr = process.communicate()
+    exit_code = process.returncode
+    return exit_code, stderr, stdout
+
+def exec_list(args):
+    if args.category:
+        cmd = "knife data bag show %(category)s | grep -E '_keys$' | sed -e 's/_keys$//'" % {
+            'category': args.category,
+        }
+    else:
+        cmd = "knife data bag list"
+    exit_code, stderr, stdout = execute(cmd)
+    for line in stdout.splitlines():
+        print line
+    return exit_code
+
+def exec_info(args):
+    fmt_hash = {
+        'category': args.category,
+        'key': args.key,
+    }
+    cmd = "knife data bag show %(category)s %(key)s_keys --format json" % fmt_hash
+    exit_code, stderr, stdout = execute(cmd)
+    struct = json.loads(stdout)
+    if len(struct) == 0:
+        return exit_code
+
+    print "#"
+    print "# Access to Chef Vault item %(category)s->%(key)s:" % fmt_hash
+    print "#"
+
+    if 'admins' in struct:
+        print
+        print '# Administrator access'
+        for admin in struct['admins']:
+            print 'user:', admin
+
+    if 'search_query' in struct:
+        print
+        print '# Search query used to generate client access list'
+        print 'search_query:', struct['search_query']
+
+    if 'clients' in struct:
+        print
+        print '# Client access'
+        for client in struct['clients']:
+            print 'node:', client
+    return exit_code
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    sub = parser.add_subparsers(help='Try `vault <sub-command> --help`')
+
+    list_ = sub.add_parser('list', help='Show a list of possible vaults and keys')
+    list_.add_argument('category', nargs='?', help='Show vault keys from this category')
+    list_.set_defaults(func=exec_list)
+
+    info = sub.add_parser('info', help='Show information about a specific vault key')
+    info.add_argument('category')
+    info.add_argument('key')
+    info.set_defaults(func=exec_info)
+
+    args = parser.parse_args()
+    sys.exit(args.func(args))
