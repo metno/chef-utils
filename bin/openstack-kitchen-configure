@@ -38,6 +38,15 @@ VALUES = {
     'network_ref': 'default',
 }
 
+
+class MultipleMatchException(Exception):
+    pass
+
+
+class NoChoiceException(Exception):
+    pass
+
+
 def interpolate(template, values):
     return template % values
 
@@ -69,22 +78,54 @@ def print_choices(choices):
     for i, choice in enumerate(choices):
         sys.stderr.write("  [%d] %s\n" % (i, choice[1]))
 
-def subst(key, value):
+def interpret_choice(choices, choice):
+    if not choice:
+        raise NoChoiceException("Empty choice")
+
+    # Return the Nth choice where N is `choice` if `choice' is an integer
+    try:
+        int_choice = int(choice)
+        assert int_choice >= 0 and int_choice < len(choices)
+        return choices[int_choice][0]
+    except (AssertionError, ValueError):
+        pass
+
+    # Consider `choice' as a regular expression, try to match against all choices' text description.
+    # Fall back to trying the regular expression against the ID.
+    regex = re.compile(choice, re.IGNORECASE)
+    for field in [1, 0]:
+        matches = [(index, regex.search(x[field])) for index, x in enumerate(choices)]
+        matches = filter(lambda x: x[1] != None, matches)
+        if len(matches) == 1:
+            return choices[matches[0][0]][0]
+        elif len(matches) > 1:
+            raise MultipleMatchException("Regular expression '%s' matches more than one entry" % choice)
+
+    # No matches, just use the value verbatim
+    raise NoChoiceException("Choice interpretation failed")
+
+def get_choices(key):
     func_name = 'choices_' + key
     if func_name in globals():
-        choices = globals()[func_name]()
+        return globals()[func_name]()
+    return None
+
+def subst(key, value):
+    choices = get_choices(key)
+    if choices:
         sys.stderr.write("Possible choices for '%s':\n" % key)
         print_choices(choices)
         while True:
             sys.stderr.write("Enter choice for '%s' [%s]: " % (key, value))
             try:
                 choice = sys.stdin.readline().strip()
-                choice = int(choice) if choice else 0
-                assert choice >= 0 and choice < len(choices)
-            except (AssertionError, ValueError):
+                choice = interpret_choice(choices, choice)
+                sys.stderr.write(" `-> using '%s' for %s\n" % (choice, key))
+                return choice
+            except MultipleMatchException, e:
+                sys.stderr.write("%s\n" % unicode(e))
+            except NoChoiceException:
                 sys.stderr.write("WHAT ARE YOU DOING, DAVE?\n")
-                continue
-            return choices[choice][0]
     else:
         sys.stderr.write("Enter value for '%s' [%s]: " % (key, value))
         return sys.stdin.readline().strip()
@@ -99,7 +140,14 @@ def subst_loop(args, values):
     for key, value in values.iteritems():
         arg_value = getattr(args, key)
         if arg_value:
-            values[key] = arg_value
+            choices = get_choices(key)
+            if choices:
+                try:
+                    values[key] = interpret_choice(choices, arg_value)
+                except NoChoiceException:
+                    values[key] = arg_value
+            else:
+                values[key] = arg_value
         elif not args.yes:
             new_value = subst(key, value)
             if new_value:
