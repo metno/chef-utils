@@ -1,0 +1,99 @@
+#!/bin/bash
+#
+# kit: create and converge virtual machines for Test Kitchen
+#
+# This program is a workaround for Test Kitchen's horrible OpenStack integration.
+#
+
+set -e
+
+# Add more if needed
+declare -A vm_map
+vm_map[ubuntu-1204]="precise"
+vm_map[ubuntu-1404]="trusty"
+
+function usage {
+    echo "Usage: $0 <create|converge|verify|test> [regex]"
+}
+
+function help {
+    usage
+    echo "where regex is a pattern matching one or more virtual machines."
+    echo
+    echo "Note that the 'all' name has no special meaning as a regular expression; it"
+    echo "will only match the name, diverging from Test Kitchen's implementation."
+    echo
+}
+
+function stderr {
+    >&2 echo $*
+}
+
+function run_verbose {
+    stderr "Running command '$*'"
+    $*
+}
+
+function list_vms {
+    kitchen list $1 --bare
+}
+
+function run_multi {
+    stderr "Fetching list of virtual machines..."
+    local action=$1
+    if [ "$2" == "all" ]; then  # it's a bug, not a feature
+        local in_regex="all.*"
+    else
+        local in_regex=$2
+    fi
+    local vm_list=($(list_vms $in_regex))
+    for regex in ${!vm_map[@]}; do
+        local os_regex=${vm_map[$regex]}
+        local vm_matches=$(printf -- '%s\n' "${vm_list[@]}" | grep $regex)
+        if [ -n "$vm_matches" ]; then
+            stderr "Configuring OpenStack for $regex a.k.a. '$os_regex'..."
+            openstack-kitchen-configure --yes --image_ref=$os_regex --flavor_ref=\.medium > .kitchen.local.yml 2>/dev/null
+        fi
+        for vm_name in $vm_matches; do
+            run_verbose kitchen $action $vm_name
+        done
+    done
+}
+
+function create {
+    run_multi create $*
+}
+
+function converge {
+    run_multi converge $*
+}
+
+function verify {
+    run_multi verify $*
+}
+
+function test {
+    run_multi test $*
+}
+
+case $1 in
+    "-h"|"--help")
+        help
+        ;;
+    "create")
+        create $2
+        ;;
+    "converge")
+        converge $2
+        ;;
+    "verify")
+        verify $2
+        ;;
+    "test")
+        test $2
+        ;;
+    *)
+        usage
+        exit 1
+        ;;
+esac
