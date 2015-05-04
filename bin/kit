@@ -80,17 +80,21 @@ case $1 in
     "-h"|"--help")
         help
         ;;
-    "create")
+    "cre"|"create")
         create $2
         ;;
-    "converge")
+    "con"|"converge")
         converge $2
         ;;
-    "verify")
+    "ver"|"verify")
         verify $2
         ;;
     "test")
         test $2
+        ;;
+    "list")
+        shift
+        run_verbose kitchen list $*
         ;;
     *)
         usage
