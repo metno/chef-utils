@@ -7,6 +7,10 @@
 
 set -e
 
+SCRIPTPATH=`readlink -m $0`
+BINPATH=`dirname $SCRIPTPATH`
+OKC=$BINPATH/openstack-kitchen-configure
+
 # Add more if needed
 declare -A vm_map
 vm_map[ubuntu-1204]="precise"
@@ -52,7 +56,7 @@ function run_multi {
         local vm_matches=$(printf -- '%s\n' "${vm_list[@]}" | grep $regex)
         if [ -n "$vm_matches" ]; then
             stderr "Configuring OpenStack for $regex a.k.a. '$os_regex'..."
-            openstack-kitchen-configure --yes --image_ref=$os_regex --flavor_ref=\.medium > .kitchen.local.yml 2>/dev/null
+            $OKC --yes --image_ref=$os_regex --flavor_ref=\.medium > .kitchen.local.yml 2>/dev/null
         fi
         for vm_name in $vm_matches; do
             run_verbose kitchen $action $vm_name
