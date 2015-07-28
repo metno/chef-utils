@@ -1,107 +1,150 @@
-#!/bin/bash
+#!/usr/bin/env python
 #
 # kit: create and converge virtual machines for Test Kitchen
 #
 # This program is a workaround for Test Kitchen's horrible OpenStack integration.
-#
 
-set -e
 
-SCRIPTPATH=`readlink -m $0`
-BINPATH=`dirname $SCRIPTPATH`
-OKC=$BINPATH/openstack-kitchen-configure
+import subprocess
+import argparse
+import sys
+import re
+import os
 
-# Add more if needed
-declare -A vm_map
-vm_map[ubuntu-1204]="precise"
-vm_map[ubuntu-1404]="trusty"
 
-function usage {
-    echo "Usage: $0 <create|converge|verify|test> [regex]"
+OS_REGEX = {
+    r'ubuntu-1204': 'CI precise',
+    r'ubuntu-1404': 'CI trusty',
 }
 
-function help {
-    usage
-    echo "where regex is a pattern matching one or more virtual machines."
-    echo
-    echo "Note that the 'all' name has no special meaning as a regular expression; it"
-    echo "will only match the name, diverging from Test Kitchen's implementation."
-    echo
-}
 
-function stderr {
-    >&2 echo $*
-}
+class CmdException(Exception):
+    pass
 
-function run_verbose {
-    stderr "Running command '$*'"
-    $*
-}
 
-function list_vms {
-    kitchen list $1 --bare
-}
+def stderr(line):
+    sys.stderr.write('{=={ KIT }==} %s\n' % line)
 
-function run_multi {
-    stderr "Fetching list of virtual machines..."
-    local action=$1
-    if [ "$2" == "all" ]; then  # it's a bug, not a feature
-        local in_regex="all.*"
-    else
-        local in_regex=$2
-    fi
-    local vm_list=($(list_vms $in_regex))
-    for regex in ${!vm_map[@]}; do
-        local os_regex=${vm_map[$regex]}
-        local vm_matches=$(printf -- '%s\n' "${vm_list[@]}" | grep $regex)
-        if [ -n "$vm_matches" ]; then
-            stderr "Configuring OpenStack for $regex a.k.a. '$os_regex'..."
-            $OKC --yes --image_ref=$os_regex --flavor_ref=\.medium > .kitchen.local.yml 2>/dev/null
-        fi
-        for vm_name in $vm_matches; do
-            run_verbose kitchen $action $vm_name
-        done
-    done
-}
 
-function create {
-    run_multi create $*
-}
+def run_dmc(cmd):
+    repr_ = ' '.join(cmd)
+    stderr('Executing "%s"' % repr_)
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    out, err = process.communicate()
+    exit_code = process.returncode
+    if exit_code != 0:
+        raise CmdException('Command "%s" returned non-zero exit status' % repr_)
+    return exit_code, out, err
 
-function converge {
-    run_multi converge $*
-}
 
-function verify {
-    run_multi verify $*
-}
+def run_call(cmd):
+    repr_ = ' '.join(cmd)
+    stderr('Executing "%s"' % repr_)
+    exit_code = subprocess.call(cmd)
+    if exit_code != 0:
+        raise CmdException('Command "%s" returned non-zero exit status' % repr_)
+    return exit_code
 
-function test {
-    run_multi test $*
-}
 
-case $1 in
-    "-h"|"--help")
-        help
-        ;;
-    "cre"|"create")
-        create $2
-        ;;
-    "con"|"converge")
-        converge $2
-        ;;
-    "ver"|"verify")
-        verify $2
-        ;;
-    "test")
-        test $2
-        ;;
-    "list")
-        shift
-        run_verbose kitchen list $*
-        ;;
-    *)
-        usage
-        exit 1
-        ;;
-esac
+def get_okc_executable_path():
+    kit_path = os.path.realpath(__file__)
+    kit_dir = os.path.dirname(kit_path)
+    okc_path = os.path.join(kit_dir, 'openstack-kitchen-configure')
+    if not os.path.exists(okc_path):
+        raise Exception('The program "openstack-kitchen-configure" was not found in "%s", it is really supposed to be there!' % okc_path)
+    return okc_path
+
+
+def get_kitchen_virtual_machines():
+    stderr('Fetching list of Test Kitchen virtual machines...')
+    exit_code, out, err = run_dmc(['kitchen', 'list', '--bare'])
+    return out.splitlines()
+
+
+def regex_match_lines(lines, regex):
+    return [l for l in lines for m in [regex.search(l)] if m]
+
+
+def get_kitchen_virtual_machines_matching_regex(regex):
+    vms = get_kitchen_virtual_machines()
+    matching = regex_match_lines(vms, regex)
+    if len(matching) == 0:
+        raise Exception('Your Test Kitchen configuration does not contain any virtual machines matching the regular expression "%s".' % regex.pattern)
+    return matching
+
+
+def get_os_regex(vm):
+    for regex, okc_regex in OS_REGEX.iteritems():
+        if re.search(regex, vm):
+            return okc_regex
+    raise Exception('No OpenStack image matching virtual machine name "%s"' % vm)
+
+
+def openstack_kitchen_configure(regex):
+    vms = get_kitchen_virtual_machines_matching_regex(regex)
+    okc_path = get_okc_executable_path()
+    for vm in vms:
+        okc_regex = get_os_regex(vm)
+        exit_code, out, err = run_dmc([okc_path, '--yes', '--image_ref=%s' % okc_regex, '--flavor_ref=\.medium'])
+        stderr('Writing OpenStack configuration for virtual machine "%s" to .kitchen.local.yml' % vm)
+        with open('.kitchen.local.yml', 'w') as f:
+            f.write(out)
+        yield vm
+
+
+def exec_multi(cmd, regex):
+    for vm in openstack_kitchen_configure(regex):
+        run_call(['kitchen', cmd, vm])
+    return 0
+
+
+def exec_create(args):
+    return exec_multi('create', args.regex)
+
+
+def exec_converge(args):
+    return exec_multi('converge', args.regex)
+
+
+def exec_verify(args):
+    return exec_multi('verify', args.regex)
+
+
+def exec_test(args):
+    return exec_multi('test', args.regex)
+
+
+def exec_destroy(args):
+    run_call(['kitchen', 'destroy', args.regex.pattern])
+    return 0
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    sub = parser.add_subparsers(help='Try `kit <sub-command> --help`')
+    regex_help = 'Regular expression matching a Test Kitchen test suite'
+
+    create = sub.add_parser('create', help='Create virtual machines')
+    create.set_defaults(func=exec_create)
+    create.add_argument('regex', nargs='?', default='.', help=regex_help)
+
+    converge = sub.add_parser('converge', help='Create and converge virtual machines')
+    converge.set_defaults(func=exec_converge)
+    converge.add_argument('regex', nargs='?', default='.', help=regex_help)
+
+    verify = sub.add_parser('verify', help='Converge and verify virtual machines')
+    verify.set_defaults(func=exec_verify)
+    verify.add_argument('regex', nargs='?', default='.', help=regex_help)
+
+    test = sub.add_parser('test', help='Verify and destroy virtual machines')
+    test.set_defaults(func=exec_test)
+    test.add_argument('regex', nargs='?', default='.', help=regex_help)
+
+    destroy = sub.add_parser('destroy', help='Destroy virtual machines')
+    destroy.set_defaults(func=exec_destroy)
+    destroy.add_argument('regex', nargs='?', default='.', help=regex_help)
+
+    args = parser.parse_args()
+    if args.regex == 'all':
+        args.regex = 'all.*'  # workaround stupid design decision in Test Kitchen
+    args.regex = re.compile(args.regex)
+    sys.exit(args.func(args))
