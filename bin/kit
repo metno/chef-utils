@@ -118,6 +118,12 @@ def exec_destroy(args):
     run_call(['kitchen', 'destroy', args.regex.pattern])
     return 0
 
+
+def exec_list(args):
+    run_call(['kitchen', 'list'])
+    return 0
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(help='Try `kit <sub-command> --help`')
@@ -143,8 +149,12 @@ if __name__ == '__main__':
     destroy.set_defaults(func=exec_destroy)
     destroy.add_argument('regex', nargs='?', default='.', help=regex_help)
 
+    list_ = sub.add_parser('list', help='List virtual machines')
+    list_.set_defaults(func=exec_list)
+
     args = parser.parse_args()
-    if args.regex == 'all':
-        args.regex = 'all.*'  # workaround stupid design decision in Test Kitchen
-    args.regex = re.compile(args.regex)
+    if hasattr(args, 'regex'):
+        if args.regex == 'all':
+            args.regex = 'all.*'  # workaround stupid design decision in Test Kitchen
+        args.regex = re.compile(args.regex)
     sys.exit(args.func(args))
